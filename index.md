@@ -1,6 +1,9 @@
 ---
 title: マークダウンで作るページ
 layout: default
+theme: jekyll-theme-minimal
+---
+
 ---
 
 # こんにちは！
