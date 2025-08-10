@@ -1,60 +1,171 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kamatamare Matchday Voice — TTS</title>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Kamatamare Matchday Voice — Text → MP3</title>
 <style>
-  body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;max-width:880px;margin:40px auto;padding:0 16px}
-  textarea,input,button{width:100%;font-size:16px} textarea{height:220px}
-  .row{margin:12px 0}.mono{font-family:ui-monospace,Menlo,monospace}
+  :root{--mx:900px}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:var(--mx);margin:40px auto;padding:0 16px;line-height:1.6}
+  h1{font-size:1.4rem;margin:0 0 12px}
+  .row{margin:12px 0}
+  label{font-size:.9rem;color:#444;display:block;margin-bottom:6px}
+  textarea,input,select,button{width:100%;font-size:16px;padding:10px;border:1px solid #d0d7de;border-radius:10px;box-sizing:border-box}
+  textarea{height:220px;resize:vertical}
+  button{cursor:pointer;background:#0ea5e9;color:white;border:none;font-weight:600}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .inline{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}
+  .pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#eef6ff;color:#0369a1;font-size:.8rem;margin-left:8px}
+  .muted{color:#666;font-size:.9rem}
+  .success{color:#065f46}
+  .error{color:#b91c1c}
+  .flex{display:flex;gap:12px;align-items:center}
+  .spinner{width:16px;height:16px;border:2px solid #93c5fd;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  audio{width:100%;margin-top:10px}
 </style>
-<h1>Matchday Voice — Text → MP3</h1>
+</head>
+<body>
+  <h1>Kamatamare Matchday Voice <span class="pill">Text → MP3</span></h1>
+  <p class="muted">Paste your narration (English or 日本語), choose language & voice, then generate an MP3 via API Gateway → Lambda → Polly.</p>
 
-<div class="row">
-  <label>Text</label>
-  <textarea id="text" placeholder="Paste narration here…"></textarea>
-</div>
-<div class="row">
-  <label>Output file basename (no extension)</label>
-  <input id="basename" placeholder="mdv_2025-08-xx_fc-osaka">
-</div>
-<div class="row"><button id="run">Generate MP3</button></div>
+  <div class="row">
+    <label for="text">Text <span id="count" class="muted"></span></label>
+    <textarea id="text" placeholder="Paste narration here…"></textarea>
+  </div>
 
-<div class="row mono" id="log"></div>
-<audio id="player" controls style="width:100%;display:none;margin-top:12px"></audio>
+  <div class="row inline">
+    <div>
+      <label for="basename">Output file basename (no extension)</label>
+      <input id="basename" placeholder="mdv_2025-08-xx_fc-osaka" />
+    </div>
+    <div>
+      <label for="lang">Language</label>
+      <select id="lang">
+        <option value="en" selected>English</option>
+        <option value="ja">日本語</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row inline">
+    <div>
+      <label for="voice">Voice</label>
+      <select id="voice"></select>
+    </div>
+    <div>
+      <label for="style">Style preset (optional)</label>
+      <select id="style">
+        <option value="">Default</option>
+        <option value="dj">DJ / Upbeat</option>
+        <option value="calm">Calm</option>
+        <option value="news">News</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="run">Generate MP3</button>
+  </div>
+
+  <div class="row mono" id="log"></div>
+  <audio id="player" controls style="display:none"></audio>
 
 <script>
-const API_URL = "https://xfu2hcm7ef.execute-api.ap-northeast-1.amazonaws.com/synthesize"; // ←あなたのURL
+/** ←← 必ず差し替え！ */
+const API_URL = "https://xfu2hcm7ef.execute-api.ap-northeast-1.amazonaws.com/synthesize";
 
+/** 言語ごとの声リスト（必要に応じて追加OK） */
+const VOICES = {
+  en: ["Matthew","Joanna","Kevin","Ruth","Ivy","Salli","Kendra","Kimberly","Joey","Justin","Aria"],
+  ja: ["Takumi","Kazuha","Mizuki"]
+};
+const DEFAULT_VOICE = { en: "Matthew", ja: "Takumi" };
+
+/** 要素参照 */
 const elText = document.getElementById("text");
 const elBase = document.getElementById("basename");
-const elLog  = document.getElementById("log");
+const elLang = document.getElementById("lang");
+const elVoice = document.getElementById("voice");
+const elStyle = document.getElementById("style");
+const elRun = document.getElementById("run");
+const elLog = document.getElementById("log");
 const elPlayer = document.getElementById("player");
+const elCount = document.getElementById("count");
 
-function log(msg){ elLog.innerText = msg; }
+/** 文字数カウンタ */
+function updateCount() {
+  const len = elText.value.length;
+  elCount.textContent = `(${len.toLocaleString()} chars)`;
+}
+elText.addEventListener("input", updateCount);
+updateCount();
 
-document.getElementById("run").addEventListener("click", async () => {
+/** 声セレクトの更新 */
+function refreshVoices() {
+  const lang = elLang.value;
+  const list = VOICES[lang] || [];
+  elVoice.innerHTML = "";
+  for (const v of list) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    if (v === DEFAULT_VOICE[lang]) o.selected = true;
+    elVoice.appendChild(o);
+  }
+}
+elLang.addEventListener("change", refreshVoices);
+refreshVoices();
+
+/** ログ表示 */
+function setLog(html, cls="") {
+  elLog.className = "row mono " + cls;
+  elLog.innerHTML = html;
+}
+
+/** 実行 */
+elRun.addEventListener("click", async () => {
   const text = elText.value.trim();
-  if(!text){ return log("⚠️ text が空です"); }
-  const file_basename = (elBase.value.trim() || ("mdv_" + Date.now()));
-  log("Processing…");
+  if (!text) {
+    setLog("⚠️ Text is empty.", "error");
+    return;
+  }
+  const file_basename = elBase.value.trim() || ("mdv_" + Date.now());
+  const lang = elLang.value;
+  const voice_id = elVoice.value;
+  const style = elStyle.value; // いまは送るだけ。Lambda側で使わないなら無視されます
+
+  elRun.disabled = true;
+  setLog(`<span class="flex"><span class="spinner"></span> Generating…</span>`);
 
   try {
     const res = await fetch(API_URL, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ text, file_basename })
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, file_basename, lang, voice_id, style })
     });
-    const bodyText = await res.text();      // ← エラー時の本文も見たいので先にtextで取る
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${bodyText}`);
 
-    const data = JSON.parse(bodyText);
+    const textBody = await res.text(); // エラー時の本文も見たい
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${textBody}`);
+
+    const data = JSON.parse(textBody);
     const url = data.presigned_url;
-    log(`✅ S3 saved: ${data.s3_key}\nvoice=${data.voice}, engine=${data.engine}\nchunks=${data.chunks}`);
-    elPlayer.src = url; elPlayer.style.display = "block"; elPlayer.play().catch(()=>{});
+    setLog(
+      `✅ Done!\n` +
+      `lang=${data.lang} voice=${data.voice} engine=${data.engine} chunks=${data.chunks}\n` +
+      `S3 Key: ${data.s3_key}\n` +
+      `<a href="${url}" target="_blank" rel="noopener">Download MP3 (presigned)</a>`,
+      "success"
+    );
+    elPlayer.src = url;
+    elPlayer.style.display = "block";
+    try { await elPlayer.play(); } catch {}
   } catch (e) {
-    log("❌ Error: " + e.message);
+    setLog("❌ " + e.message, "error");
+  } finally {
+    elRun.disabled = false;
   }
 });
 </script>
+</body>
 </html>
